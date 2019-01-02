@@ -13,6 +13,7 @@ import qualified Distribution.Types.BuildInfo       as Cabal
 import qualified Distribution.Types.HookedBuildInfo as Cabal
 import qualified Distribution.Types.LocalBuildInfo  as Cabal
 import           System.Directory                   (removeFile)
+import           System.FilePath                    ((</>))
 import           System.IO.Temp                     (writeTempFile)
 
 mainWithCLib :: FilePath -- ^c project root
@@ -23,10 +24,9 @@ mainWithCLib :: FilePath -- ^c project root
              -- dir, respectively
              -> IO ()
 mainWithCLib cProjRoot bundledLibs bundledLibDirs builder = do
-  putStrLn "defaultMainWithCMake not implemented yet"
   Cabal.defaultMainWithHooks Cabal.simpleUserHooks
     { Cabal.preBuild = customPreBuild bundledLibs bundledLibDirs
-    , Cabal.buildHook = customBuild cProjRoot builder
+    , Cabal.buildHook = customBuild cProjRoot bundledLibDirs builder
     }
 
 customPreBuild :: [String]
@@ -37,18 +37,18 @@ customPreBuild :: [String]
 customPreBuild bundledLibs bundledLibDirs _ _ = do
   let buildInfo = Cabal.emptyBuildInfo
         { Cabal.extraLibs = bundledLibs
-        , Cabal.extraLibDirs = bundledLibDirs
         }
   pure $ (Just buildInfo, [])
 
 customBuild :: FilePath -- ^c project root
+            -> [FilePath] -- bundled lib dirs
             -> (BuildAction -> BuildDirs -> IO ())
             -> Cabal.PackageDescription
             -> Cabal.LocalBuildInfo
             -> Cabal.UserHooks
             -> Cabal.BuildFlags
             -> IO ()
-customBuild cProjRoot builder packageDesc localBuildInfo userHooks buildFlags = do
+customBuild cProjRoot bundledLibDirs builder packageDesc localBuildInfo userHooks buildFlags = do
   currentTime <- getCurrentTime
   let versionInfo = "const char *clibver = \"" ++ show currentTime ++ "\";\n"
   let buildDir = Cabal.buildDir localBuildInfo
@@ -57,6 +57,8 @@ customBuild cProjRoot builder packageDesc localBuildInfo userHooks buildFlags = 
       updateLibrary lib = lib
         { Cabal.libBuildInfo = (Cabal.libBuildInfo lib)
             { Cabal.cSources = clibVersionFile : Cabal.cSources (Cabal.libBuildInfo lib)
+            , Cabal.extraLibDirs = fmap (\dir -> buildDir </> dir) bundledLibDirs
+                ++ Cabal.extraLibDirs (Cabal.libBuildInfo lib)
             }
         }
   let packageDesc' = packageDesc

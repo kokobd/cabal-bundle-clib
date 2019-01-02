@@ -3,4 +3,10 @@ module Development.CabalBundleCLib.ExampleApp.Main
   ) where
 
 main :: IO ()
-main = putStrLn "hi"
+main = do
+  putStrLn "Hello from Haskell"
+  cpp_hello
+  putStrLn "Back to Haskell again"
+
+foreign import ccall unsafe "cpp_hello"
+  cpp_hello :: IO ()

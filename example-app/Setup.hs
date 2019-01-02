@@ -1,4 +1,9 @@
-import           Development.CabalBundleCLib (mainWithCLib)
+import           Development.CabalBundleCLib       (mainWithCLib)
+import           Development.CabalBundleCLib.CMake (simpleCMakeBuilder)
 
 main :: IO ()
-main = mainWithCLib undefined undefined undefined undefined
+main = mainWithCLib
+  "cpp_proj"
+  ["mycpplib"]
+  ["."]
+  simpleCMakeBuilder

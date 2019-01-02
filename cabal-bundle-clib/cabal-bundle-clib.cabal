@@ -29,3 +29,5 @@ library
     , time
     , temporary
     , directory
+    , process
+    , filepath
