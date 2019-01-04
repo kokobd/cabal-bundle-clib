@@ -2,3 +2,4 @@
 dist*/
 cmake-build*/
 .ghc.environment.*
+.idea/

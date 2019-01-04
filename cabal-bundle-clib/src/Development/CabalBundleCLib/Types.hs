@@ -2,6 +2,7 @@ module Development.CabalBundleCLib.Types
   ( BuildAction(..)
   , BuildMode(..)
   , BuildDirs(..)
+  , Builder
   ) where
 
 -- |Type for build actions.
@@ -18,3 +19,5 @@ data BuildDirs = BuildDirs
   , buildDirsBuild   :: FilePath
   , buildDirsInstall :: FilePath
   } deriving (Show, Eq)
+
+type Builder = BuildAction -> BuildDirs -> IO ()

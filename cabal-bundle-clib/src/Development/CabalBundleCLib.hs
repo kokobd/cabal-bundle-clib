@@ -3,18 +3,20 @@ module Development.CabalBundleCLib
   , module Development.CabalBundleCLib.Types
   ) where
 
-import           Data.Maybe                         (fromJust)
-import           Data.Time.Clock                    (getCurrentTime)
+import           Data.Time.Clock                            (getCurrentTime)
 import           Development.CabalBundleCLib.Types
-import qualified Distribution.PackageDescription    as Cabal
-import qualified Distribution.Simple                as Cabal
-import qualified Distribution.Simple.Setup          as Cabal
-import qualified Distribution.Types.BuildInfo       as Cabal
-import qualified Distribution.Types.HookedBuildInfo as Cabal
-import qualified Distribution.Types.LocalBuildInfo  as Cabal
-import           System.Directory                   (removeFile)
-import           System.FilePath                    ((</>))
-import           System.IO.Temp                     (writeTempFile)
+import qualified Distribution.Compat.Lens                   as Lens
+import qualified Distribution.PackageDescription            as Cabal hiding
+                                                                      (Flag)
+import qualified Distribution.Simple                        as Cabal
+import qualified Distribution.Simple.Setup                  as Cabal
+import qualified Distribution.Types.BuildInfo.Lens          as CabalLens
+import qualified Distribution.Types.Library.Lens            as CabalLens
+import qualified Distribution.Types.LocalBuildInfo          as Cabal
+import qualified Distribution.Types.PackageDescription.Lens as CabalLens
+import           System.Directory                           (removeFile)
+import           System.FilePath                            ((</>))
+import           System.IO.Temp                             (writeTempFile)
 
 mainWithCLib :: FilePath -- ^c project root
              -> [String] -- ^bundled libraries
@@ -23,24 +25,33 @@ mainWithCLib :: FilePath -- ^c project root
              -- The three 'FilePath's are source dir, build dir and installation
              -- dir, respectively
              -> IO ()
-mainWithCLib cProjRoot bundledLibs bundledLibDirs builder = do
+mainWithCLib cProjRoot bundledLibs bundledLibDirs builder =
   Cabal.defaultMainWithHooks Cabal.simpleUserHooks
-    { Cabal.preBuild = customPreBuild bundledLibs bundledLibDirs
-    , Cabal.buildHook = customBuild cProjRoot bundledLibDirs builder
+    { Cabal.confHook = customConfigure bundledLibs
+    , Cabal.postConf = \_ _ _ _ -> pure () -- remove the check for foreign libs
+    , Cabal.buildHook = customBuild cProjRoot bundledLibs bundledLibDirs builder
     }
 
-customPreBuild :: [String]
-               -> [String]
-               -> Cabal.Args
-               -> Cabal.BuildFlags
-               -> IO Cabal.HookedBuildInfo
-customPreBuild bundledLibs bundledLibDirs _ _ = do
-  let buildInfo = Cabal.emptyBuildInfo
-        { Cabal.extraLibs = bundledLibs
-        }
-  pure $ (Just buildInfo, [])
+customConfigure :: [String]
+                -> (Cabal.GenericPackageDescription, Cabal.HookedBuildInfo)
+                -> Cabal.ConfigFlags
+                -> IO Cabal.LocalBuildInfo
+customConfigure bundledLibs gpkgDesc configFlags = do
+  lbi <- Cabal.confHook Cabal.simpleUserHooks gpkgDesc configFlags
+  let localPkgDescr = Cabal.localPkgDescr lbi
+      localPkgDescr' = Lens.over CabalLens.library updateLibrary localPkgDescr
+  pure $ lbi { Cabal.localPkgDescr = localPkgDescr' }
+  where
+    updateLibrary :: Maybe Cabal.Library -> Maybe Cabal.Library
+    updateLibrary = fmap $ Lens.over CabalLens.libBuildInfo updateBuildInfo
+    updateBuildInfo :: Cabal.BuildInfo -> Cabal.BuildInfo
+    updateBuildInfo bi = bi
+      { Cabal.extraLibs = bundledLibs ++ Cabal.extraLibs bi
+      , Cabal.extraBundledLibs = bundledLibs ++ Cabal.extraBundledLibs bi
+      }
 
 customBuild :: FilePath -- ^c project root
+            -> [String] -- ^bundled libs
             -> [FilePath] -- bundled lib dirs
             -> (BuildAction -> BuildDirs -> IO ())
             -> Cabal.PackageDescription
@@ -48,27 +59,32 @@ customBuild :: FilePath -- ^c project root
             -> Cabal.UserHooks
             -> Cabal.BuildFlags
             -> IO ()
-customBuild cProjRoot bundledLibDirs builder packageDesc localBuildInfo userHooks buildFlags = do
+customBuild cProjRoot bundledLibs bundledLibDirs builder packageDesc localBuildInfo userHooks buildFlags = do
   currentTime <- getCurrentTime
   let versionInfo = "const char *clibver = \"" ++ show currentTime ++ "\";\n"
   let buildDir = Cabal.buildDir localBuildInfo
   clibVersionFile <- writeTempFile buildDir "clibver.c" versionInfo
   let updateLibrary :: Cabal.Library -> Cabal.Library
-      updateLibrary lib = lib
-        { Cabal.libBuildInfo = (Cabal.libBuildInfo lib)
-            { Cabal.cSources = clibVersionFile : Cabal.cSources (Cabal.libBuildInfo lib)
-            , Cabal.extraLibDirs = fmap (\dir -> buildDir </> dir) bundledLibDirs
-                ++ Cabal.extraLibDirs (Cabal.libBuildInfo lib)
-            }
-        }
-  let packageDesc' = packageDesc
-        { Cabal.library = fmap updateLibrary (Cabal.library packageDesc)
-        }
+      updateLibrary lib =
+        let lib' = Lens.over (CabalLens.libBuildInfo . CabalLens.cSources) (clibVersionFile :) lib
+            lib'' = Lens.over (CabalLens.libBuildInfo . CabalLens.extraLibDirs)
+              ((fmap (\dir -> buildDir </> dir) bundledLibDirs) ++) lib'
+         in Lens.over (CabalLens.libBuildInfo . CabalLens.extraLibs) (bundledLibs ++) lib''
+  let packageDesc' = Lens.over CabalLens.library (fmap updateLibrary) packageDesc
   builder
-    (BuildActionBuild BuildModeDebug) -- TODO choose build type based on optimization level
-    (BuildDirs cProjRoot (buildDir ++ "clibbuild") buildDir) -- TODO use some unique build dir name
+    (BuildActionBuild (getBuildMode localBuildInfo))
+    (BuildDirs cProjRoot (buildDir </> "clibbuild") buildDir) -- TODO use some unique build dir name
   simpleBuildHook packageDesc' localBuildInfo userHooks buildFlags
   removeFile clibVersionFile
+
+getBuildMode :: Cabal.LocalBuildInfo -> BuildMode
+getBuildMode localBuildInfo =
+  case Cabal.configOptimization . Cabal.configFlags $ localBuildInfo of
+    Cabal.Flag level ->
+      case level of
+        Cabal.MaximumOptimisation -> BuildModeRelease
+        _                         -> BuildModeDebug
+    _ -> BuildModeDebug
 
 simpleBuildHook :: Cabal.PackageDescription
                 -> Cabal.LocalBuildInfo

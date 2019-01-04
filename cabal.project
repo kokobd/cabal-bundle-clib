@@ -1,3 +1,5 @@
 packages:
   cabal-bundle-clib/
   example-app/
+  example-lib/
+  example-lib-consumer/

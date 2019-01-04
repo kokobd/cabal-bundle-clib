@@ -5,17 +5,25 @@ module Development.CabalBundleCLib.CMake
   ) where
 
 import           Development.CabalBundleCLib.Types
-import           System.Directory                  (removeDirectoryRecursive)
+import           System.Directory                  (withCurrentDirectory)
 import           System.FilePath                   ((</>))
 import           System.Process                    (callCommand, callProcess)
 
 simpleCMakeBuilder :: BuildAction -> BuildDirs -> IO ()
 simpleCMakeBuilder BuildActionClean BuildDirs{..} =
-  removeDirectoryRecursive buildDirsBuild
+  withCurrentDirectory buildDirsBuild $
+    callProcess "make" ["clean"]
 simpleCMakeBuilder (BuildActionBuild mode) BuildDirs{..} = do
-  callProcess "cmake" ["-S", buildDirsSource, "-B", buildDirsBuild]
+  callProcess "cmake" ["-S", buildDirsSource, "-B", buildDirsBuild, (buildModeToFlag mode)]
   callProcess "cmake" ["--build", buildDirsBuild]
   callCommand $ "cp " ++ buildDirsBuild </> "*.a" ++ " " ++ buildDirsInstall
+
+buildModeToFlag :: BuildMode -> String
+buildModeToFlag buildMode = "-DCMAKE_BUILD_TYPE=" ++ mode
+  where
+    mode = case buildMode of
+             BuildModeDebug   -> "Debug"
+             BuildModeRelease -> "Release"
 
 {-
 cmake -S $SOURCE_DIR -B $BUILD_DIR
